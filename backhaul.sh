@@ -1028,7 +1028,7 @@ BEGIN { sec="" }
 sec == target_section && $0 ~ "^[[:space:]]*" target_key "[[:space:]]*=" {
   sub("^[[:space:]]*" target_key "[[:space:]]*=[[:space:]]*","")
   gsub(/^[[:space:]]+|[[:space:]]+$/,"")
-  gsub(/^\"|\"$/ ,"")
+  gsub(/^"|"$/ ,"")
   print; exit
 }' "$file"
 }
