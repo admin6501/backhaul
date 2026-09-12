@@ -42,7 +42,7 @@ local var_name="$3"
 local input
 echo -ne "[-] $prompt (default: $default): "
 read -r input
-eval "$var_name=\"${input:-$default}\""
+printf -v "$var_name" '%s' "${input:-$default}"
 }
 prompt_boolean() {
 local prompt="$1"
@@ -159,8 +159,18 @@ return 1
 fi
 
 mkdir -p "$BACKHAUL_INSTALL_DIR"
-cp -a "$tmp_dir/backhaul/backhaul-core/." "$BACKHAUL_INSTALL_DIR/"
-chmod +x "$BACKHAUL_INSTALL_DIR/backhaul_premium"
+if ! cp -a "$tmp_dir/backhaul/backhaul-core/." "$BACKHAUL_INSTALL_DIR/"; then
+colorize red "Failed to copy Backhaul Core files."
+rm -rf "$tmp_dir"
+press_key
+return 1
+fi
+if ! chmod +x "$BACKHAUL_INSTALL_DIR/backhaul_premium"; then
+colorize red "Failed to make backhaul_premium executable."
+rm -rf "$tmp_dir"
+press_key
+return 1
+fi
 rm -rf "$tmp_dir"
 
 colorize green "✔ Backhaul Core installed successfully." bold
@@ -172,7 +182,9 @@ version=$("$BACKHAUL_INSTALL_DIR/backhaul_premium" -v 2>/dev/null || true)
 press_key
 }
 
-install_jq
+if ! install_jq; then
+exit 1
+fi
 declare -A CONFIG
 reset_config() {
 CONFIG=()
@@ -333,8 +345,7 @@ prompt_with_default "TUN Local Address (CIDR)" "$default_local" CONFIG[tun_local
 if validate_cidr "${CONFIG[tun_local_addr]}"; then
 break
 fi
-local suggested=$(validate_cidr "${CONFIG[tun_local_addr]}" 2>&1)
-colorize red "Invalid CIDR. Network address should be: $suggested"
+colorize red "Invalid CIDR. Use a valid host address with a prefix from /1 to /32; network and broadcast addresses are not allowed."
 done
 while true; do
 prompt_with_default "TUN Remote Address (CIDR)" "$default_remote" CONFIG[tun_remote_addr]
@@ -398,11 +409,19 @@ prompt_with_default "Algorithm" "aes-128-gcm" CONFIG[algorithm]
 if is_valid_algorithm "${CONFIG[algorithm]}"; then break; fi
 colorize red "Invalid algorithm selected."
 done
+if [[ "$mode" == "server" ]]; then
 while true; do
 prompt_with_default "PSK (Base64)" "$(openssl rand -base64 32 2>/dev/null | tr -d '\n')" CONFIG[psk]
 if [[ "${CONFIG[psk]}" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then break; fi
 colorize red "Invalid PSK. Use 32 random bytes in Base64 format."
 done
+else
+while true; do
+prompt_with_default "Enter PSK from Iran (Base64)" "" CONFIG[psk]
+if [[ "${CONFIG[psk]}" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then break; fi
+colorize red "Invalid PSK. Enter the exact PSK generated on the Iran server."
+done
+fi
 prompt_with_default "KDF Iterations" "100000" CONFIG[kdf_iterations]
 fi
 CONFIG[forwarder]="iptables"
@@ -432,7 +451,7 @@ echo
 return
 fi
 if [[ ! -f "$CERT_FILE" || ! -f "$KEY_FILE" ]]; then
-colorize red "[*] TLS certificate or key missing, generating self-signed Ed25519 cert..."
+colorize red "[*] TLS certificate or key missing, generating self-signed EC P-256 cert..."
 openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -x509 -days 365 -sha256 -keyout "$KEY_FILE" -out  "$CERT_FILE" -subj "/CN=backhaul.com"
 colorize green "[*] Generated $CERT_FILE and $KEY_FILE"
 echo
@@ -511,7 +530,7 @@ read -r CONFIG[ports_mapping]
 echo ""
 else
 colorize blue "━━━ Port Mapping Configuration (tun helper) ━━━" bold
-colorize magenta "Forwarder: use 'bbackhaul' for TCP support only, or 'iptables' for TCP + UDP support"
+colorize magenta "Forwarder: use 'backhaul' for TCP support only, or 'iptables' for TCP + UDP support"
 prompt_with_default "Forwarder (backhaul/iptables)" "backhaul" CONFIG[forwarder]
 echo ""
 colorize green "Supported formats:"
@@ -543,7 +562,7 @@ colorize red "Invalid profile: ${CONFIG[ipx_profile]}"
 echo
 colorize yellow "Please choose one of: ${AVAILABLE_PROFILES[*]}"
 done
-prompt_with_default "Listen IP" $SERVER_IP CONFIG[ipx_listen_ip]
+prompt_with_default "Listen IP" "$SERVER_IP" CONFIG[ipx_listen_ip]
 while :; do
 prompt_with_default "Destination IP" "" CONFIG[ipx_dst_ip]
 if [[ -n "${CONFIG[ipx_dst_ip]}" ]]; then
@@ -552,7 +571,7 @@ fi
 colorize red "Destination IP cannot be empty."
 done
 interface=$(ip route show default | awk '{print $5}')
-prompt_with_default "Network Interface" $interface CONFIG[ipx_interface]
+prompt_with_default "Network Interface" "$interface" CONFIG[ipx_interface]
 if [[ "${CONFIG[ipx_profile]}" == "icmp" ]]; then
 prompt_with_default "ICMP Type" "0" CONFIG[ipx_icmp_type]
 prompt_with_default "ICMP Code" "0" CONFIG[ipx_icmp_code]
@@ -759,7 +778,10 @@ fi
 generate_toml_config "$mode" "$config_file" "$is_tun" "$is_ipx"
 local service_type
 [[ "$mode" == "server" ]] && service_type="iran" || service_type="kharej"
-create_systemd_service "$service_type" "$tunnel_port" "$config_file"
+if ! create_systemd_service "$service_type" "$tunnel_port" "$config_file"; then
+press_key
+return 1
+fi
 echo ""
 colorize green "✔ Configuration completed successfully!" bold
 echo ""
@@ -789,8 +811,15 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl daemon-reload
-systemctl enable --now "backhaul-${type}${port}.service" >/dev/null 2>&1
+if ! systemctl daemon-reload; then
+colorize red "Failed to reload systemd." bold
+return 1
+fi
+if ! systemctl enable --now "backhaul-${type}${port}.service" >/dev/null 2>&1; then
+colorize red "Service backhaul-${type}${port} failed to start." bold
+colorize yellow "Check: journalctl -u backhaul-${type}${port}.service -n 50 --no-pager"
+return 1
+fi
 colorize green "✔ Service backhaul-${type}${port} created and started" bold
 }
 SERVER_IP=$(hostname -I | awk '{print $1}')
@@ -874,8 +903,8 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOF
-sudo systemctl daemon-reload
-sudo systemctl enable --now "$(basename "$service_file")"
+systemctl daemon-reload
+systemctl enable --now "$(basename "$service_file")"
 echo "Created and started $(basename "$service_file")"
 done
 fi
@@ -994,7 +1023,7 @@ cron_interval_hours() {
 local service="$1" f
 f="$(auto_restart_file "$service")"
 [[ -f "$f" ]] || return 1
-awk '$1 ~ /^0$/ && $2 ~ /^\\*\\/([1-9]|1[0-9]|2[0-4])$/ {sub(/^\\*\\//,"",$2); print $2; exit}' "$f"
+awk '$1 ~ /^0$/ && $2 ~ /^\*\/([1-9]|1[0-9]|2[0-4])$/ {sub(/^\*\//,"",$2); print $2; exit}' "$f"
 }
 
 toml_replace_key() {
@@ -1183,8 +1212,8 @@ else
   [[ -n "$remote" ]] && colorize cyan "[i] Endpoint: $remote"
 fi
 health="$(toml_get_key "$file" tun health_port)"
-if [[ -n "$health" ]] && command -v ss >/dev/null 2>&1; then
-  if ss -lnt 2>/dev/null | awk '{print $4}' | grep -Eq "(:|\\.)${health}$"; then colorize green "[✓] Health port is listening: $health"; else colorize yellow "[!] Health port is not listening: $health"; fi
+if [[ -n "$health" ]]; then
+  colorize green "[✓] Health port configured: $health"
 fi
 if command -v ip >/dev/null 2>&1; then
   colorize cyan "[i] Default route: $(ip route show default | head -1)"
@@ -1221,6 +1250,7 @@ colorize cyan "Enable / Disable: $name" bold
 echo
 if systemctl is-active --quiet "$service" || systemctl is-enabled --quiet "$service" 2>/dev/null; then
   interval="$(cron_interval_hours "$service" || true)"
+  rm -f "$disabled_state"
   [[ -n "$interval" ]] && printf '%s\n' "$interval" > "$disabled_state"
   rm -f "$(auto_restart_file "$service")"
   systemctl disable --now "$service" >/dev/null 2>&1
@@ -1323,7 +1353,7 @@ service_name="backhaul-${config_name}.service"
 service_path="$service_dir/$service_name"
 [ -f "$config_path" ] && rm -f "$config_path"
 if [[ -f "$service_path" ]]; then
-systemctl is-active --quiet "$service_name" && systemctl disable --now "$service_name" >/dev/null 2>&1
+systemctl disable --now "$service_name" >/dev/null 2>&1 || true
 rm -f "$service_path"
 fi
 systemctl daemon-reload
