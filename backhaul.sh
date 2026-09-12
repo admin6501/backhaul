@@ -142,7 +142,6 @@ fi
 fi
 
 local tmp_dir
-rm -rf "$BACKHAUL_INSTALL_DIR"
 tmp_dir=$(mktemp -d)
 colorize yellow "Cloning Backhaul repository..."
 if ! git clone --depth 1 "$BACKHAUL_REPO" "$tmp_dir/backhaul"; then
@@ -237,7 +236,11 @@ colorize red "Invalid algorithm selected. Please choose one from the list."
 echo
 fi
 done
-prompt_with_default "PSK (32-char base64)" "pN9m6m0tH3nE3V8xKZ6Lq5yYcW2K1S7QG9u4cF0A8M4=" CONFIG[psk]
+while true; do
+prompt_with_default "PSK (32-byte base64)" "$(openssl rand -base64 32 2>/dev/null | tr -d '\n')" CONFIG[psk]
+if [[ "${CONFIG[psk]}" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then break; fi
+colorize red "Invalid PSK. Use 32 random bytes in Base64 format."
+done
 prompt_with_default "KDF Iterations" "100000" CONFIG[kdf_iterations]
 fi
 else
@@ -715,12 +718,10 @@ local is_ipx="false"
 [[ "${CONFIG[tun_encapsulation]}" == "ipx" || "${CONFIG[transport_type]}" == "spoof-tunnel" ]] && is_ipx="true"
 if [[ "${CONFIG[transport_type]}" == "spoof-tunnel" ]]; then
 prompt_spoof_tunnel_section "$mode"
+prompt_ports_section "$mode" "$is_tun"
 elif [[ "${CONFIG[transport_type]}" == "tun" ]]; then
 prompt_tun_section "${CONFIG[transport_type]}" "$mode" "$is_ipx"
 prompt_ipx_section "$is_ipx" "$mode"
-else
-prompt_connection_section "$mode"
-fi
 prompt_security_section "$is_ipx"
 prompt_accept_udp_section "${CONFIG[accept_udp]}"
 prompt_mux_section "${CONFIG[transport_type]}"
@@ -728,6 +729,16 @@ prompt_tls_section "$mode" "${CONFIG[transport_type]}"
 prompt_tuning_section "$is_ipx" "$is_tun"
 prompt_logging_section
 prompt_ports_section "$mode" "$is_tun"
+else
+prompt_connection_section "$mode"
+prompt_security_section "$is_ipx"
+prompt_accept_udp_section "${CONFIG[accept_udp]}"
+prompt_mux_section "${CONFIG[transport_type]}"
+prompt_tls_section "$mode" "${CONFIG[transport_type]}"
+prompt_tuning_section "$is_ipx" "$is_tun"
+prompt_logging_section
+prompt_ports_section "$mode" "$is_tun"
+fi
 local tunnel_port
 if [[ "$mode" == "server" ]]; then
 tunnel_port=$(echo "${CONFIG[bind_addr]}" | grep -oP ':\K[0-9]+$')
@@ -798,7 +809,6 @@ echo -e "\033[0m\033[32m"
 echo -e "Script Version: \033[33m${SCRIPT_VERSION}\033[32m"
 [[ -f "${config_dir}/backhaul_premium" ]] && \
 echo -e "Core Version: \033[33m$($config_dir/backhaul_premium -v)\033[32m"
-echo -e "Telegram Channel: \033[33m@Gozar_XRay\033[0m"
 }
 display_server_info() {
 echo -e "\e[93m═══════════════════════════════════════════\e[0m"
@@ -967,6 +977,278 @@ case "$ar_choice" in
 *) colorize red "Invalid option!" && sleep 1 ;;
 esac
 }
+# ---- Per-tunnel management helpers ----
+tunnel_backup_dir="${config_dir}/backups"
+backup_tunnel_config() {
+local config_path="$1" name stamp backup
+[[ -f "$config_path" ]] || return 1
+mkdir -p "$tunnel_backup_dir"
+name="$(basename "$config_path" .toml)"
+stamp="$(date +%Y%m%d-%H%M%S)"
+backup="$tunnel_backup_dir/${name}-${stamp}.toml"
+cp -a -- "$config_path" "$backup" || return 1
+printf '%s\n' "$backup"
+}
+
+cron_interval_hours() {
+local service="$1" f
+f="$(auto_restart_file "$service")"
+[[ -f "$f" ]] || return 1
+awk '$1 ~ /^0$/ && $2 ~ /^\\*\\/([1-9]|1[0-9]|2[0-4])$/ {sub(/^\\*\\//,"",$2); print $2; exit}' "$f"
+}
+
+toml_replace_key() {
+local file="$1" section="$2" key="$3" value="$4" out
+[[ -f "$file" ]] || return 1
+out="${file}.tmp.$$"
+awk -v target_section="$section" -v target_key="$key" -v new_value="$value" '
+BEGIN { sec=""; changed=0 }
+/^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+  sec=$0; gsub(/^[[:space:]]*\[/,"",sec); gsub(/\][[:space:]]*$/,"",sec)
+}
+{
+  line=$0
+  if (sec == target_section && line ~ "^[[:space:]]*" target_key "[[:space:]]*=") {
+    print target_key " = " new_value
+    changed=1
+  } else print line
+}
+END { if (!changed) exit 2 }
+' "$file" > "$out" || { rm -f "$out"; return 1; }
+cat "$out" > "$file" && rm -f "$out"
+}
+
+toml_get_key() {
+local file="$1" section="$2" key="$3"
+awk -v target_section="$section" -v target_key="$key" '
+BEGIN { sec="" }
+/^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+  sec=$0; gsub(/^[[:space:]]*\[/,"",sec); gsub(/\][[:space:]]*$/,"",sec)
+}
+sec == target_section && $0 ~ "^[[:space:]]*" target_key "[[:space:]]*=" {
+  sub("^[[:space:]]*" target_key "[[:space:]]*=[[:space:]]*","")
+  gsub(/^[[:space:]]+|[[:space:]]+$/,"")
+  gsub(/^\"|\"$/ ,"")
+  print; exit
+}' "$file"
+}
+
+prompt_edit_value() {
+local label="$1" current="$2" var="$3" input
+printf '%s' "[-] $label (current: $current, Enter=keep): "
+read -r input
+if [[ -n "$input" ]]; then printf -v "$var" '%s' "$input"; else printf -v "$var" '%s' "$current"; fi
+}
+
+edit_tunnel_config() {
+local file="$1" name="$2" backup mode section key current input backup_path changed=0
+[[ -f "$file" ]] || { colorize red "Configuration file not found."; press_key; return; }
+backup_path="$(backup_tunnel_config "$file")" || { colorize red "Could not create backup."; press_key; return; }
+clear
+colorize cyan "Edit Configuration: $name" bold
+echo "Backup: $backup_path"
+echo
+if grep -q '^type = "tun"$' "$file" && grep -q '^encapsulation = "ipx"$' "$file"; then mode="ipx"; else mode="normal"; fi
+while true; do
+  echo "1) MTU"
+  echo "2) Health Port"
+  echo "3) Heartbeat Interval"
+  echo "4) Heartbeat Timeout"
+  echo "5) Encryption"
+  echo "6) Algorithm"
+  echo "7) PSK"
+  echo "8) KDF Iterations"
+  echo "9) Tuning Profile"
+  echo "10) Workers"
+  echo "11) Channel Size"
+  echo "12) SO_SNDBUF"
+  echo "13) Batch Size"
+  echo "14) Log Level"
+  if [[ "$mode" == "ipx" ]]; then
+    echo "15) TUN Local Address"
+    echo "16) TUN Remote Address"
+    echo "17) Spoof Source IP"
+    echo "18) Spoof Destination IP"
+    echo "19) IPX Interface"
+    echo "20) IPX Listen IP"
+    echo "21) IPX Destination IP"
+  fi
+  if grep -q '^\[ports\]$' "$file"; then echo "22) Port Mappings"; fi
+  echo "0) Save & Return"
+  echo
+  read -r -p "Select setting: " input
+  [[ "$input" == "0" ]] && break
+  case "$input" in
+    1) section="tun"; key="mtu"; label="MTU";;
+    2) section="tun"; key="health_port"; label="Health Port";;
+    3) section="transport"; key="heartbeat_interval"; label="Heartbeat Interval";;
+    4) section="transport"; key="heartbeat_timeout"; label="Heartbeat Timeout";;
+    5) section="security"; key="enable_encryption"; label="Enable Encryption";;
+    6) section="security"; key="algorithm"; label="Algorithm";;
+    7) section="security"; key="psk"; label="PSK";;
+    8) section="security"; key="kdf_iterations"; label="KDF Iterations";;
+    9) section="tuning"; key="tuning_profile"; label="Tuning Profile";;
+    10) section="tuning"; key="workers"; label="Workers";;
+    11) section="tuning"; key="channel_size"; label="Channel Size";;
+    12) section="tuning"; key="so_sndbuf"; label="SO_SNDBUF";;
+    13) section="tuning"; key="batch_size"; label="Batch Size";;
+    14) section="logging"; key="log_level"; label="Log Level";;
+    15) section="tun"; key="local_addr"; label="TUN Local Address";;
+    16) section="tun"; key="remote_addr"; label="TUN Remote Address";;
+    17) section="ipx"; key="spoof_src_ip"; label="Spoof Source IP";;
+    18) section="ipx"; key="spoof_dst_ip"; label="Spoof Destination IP";;
+    19) section="ipx"; key="interface"; label="IPX Interface";;
+    20) section="ipx"; key="listen_ip"; label="IPX Listen IP";;
+    21) section="ipx"; key="dst_ip"; label="IPX Destination IP";;
+    22) section="ports"; key="mapping"; label="Port Mappings";;
+    *) colorize red "Invalid option."; sleep 1; continue;;
+  esac
+  current="$(toml_get_key "$file" "$section" "$key")"
+  if [[ "$key" == "mapping" ]]; then
+    echo "Current: $current"
+    echo "For multiple mappings use comma-separated values, e.g. 443,443=8443"
+    read -r -p "New mappings (Enter=keep): " input
+    [[ -z "$input" ]] && continue
+    local array_value
+    array_value="["
+    IFS=',' read -r -a _maps <<< "$input"
+    for m in "${_maps[@]}"; do m="${m// /}"; [[ -n "$m" ]] && array_value="$array_value\"$m\", "; done
+    array_value="${array_value%, }]"
+    # Replace the complete mapping array safely with a compact single-line array.
+    awk -v section="ports" -v key="mapping" -v val="$array_value" 'BEGIN{sec="";done=0}
+      /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {sec=$0;gsub(/^[[:space:]]*\[/,"",sec);gsub(/\][[:space:]]*$/,"",sec)}
+      sec==section && $0 ~ /^[[:space:]]*mapping[[:space:]]*=/ {print "mapping = " val; done=1; next}
+      sec==section && done==0 && $0 ~ /^[[:space:]]*"/ {next}
+      {print}' "$file" > "${file}.tmp.$$" && cat "${file}.tmp.$$" > "$file" && rm -f "${file}.tmp.$$"
+  else
+    if [[ "$key" == "psk" ]]; then
+      input="$(openssl rand -base64 32 2>/dev/null | tr -d '\n')"
+      echo "A new random PSK will be generated."
+      read -r -p "Press Enter to accept generated PSK, or type a new PSK: " current_input
+      [[ -n "$current_input" ]] && input="$current_input"
+      [[ ! "$input" =~ ^[A-Za-z0-9+/]{43}=$ ]] && { colorize red "Invalid PSK."; sleep 1; continue; }
+      value="\"$input\""
+    else
+      prompt_edit_value "$label" "$current" input
+      [[ -z "$input" ]] && continue
+      case "$key" in
+        enable_encryption) [[ "$input" == true || "$input" == false ]] || { colorize red "Use true or false."; sleep 1; continue; };;
+        algorithm) is_valid_algorithm "$input" || { colorize red "Invalid algorithm."; sleep 1; continue; };;
+        mtu|health_port|heartbeat_interval|heartbeat_timeout|kdf_iterations|workers|channel_size|so_sndbuf|batch_size) [[ "$input" =~ ^[0-9]+$ ]] || { colorize red "Enter a number."; sleep 1; continue; };;
+        *) [[ "$input" != *'"'* ]] || { colorize red 'Double quotes are not allowed here.'; sleep 1; continue; };;
+      esac
+      case "$key" in
+        enable_encryption) value="$input";;
+        mtu|health_port|heartbeat_interval|heartbeat_timeout|kdf_iterations|workers|channel_size|so_sndbuf|batch_size) value="$input";;
+        *) value="\"$input\"";;
+      esac
+    fi
+    if ! toml_replace_key "$file" "$section" "$key" "$value"; then
+      colorize red "Could not update $section.$key"
+    else
+      changed=1
+      colorize green "Updated $section.$key"
+    fi
+  fi
+done
+if (( changed )); then
+  systemctl daemon-reload
+  if systemctl restart "backhaul-${name}.service" >/dev/null 2>&1; then
+    colorize green "Configuration saved and service restarted." bold
+  else
+    colorize yellow "Configuration saved, but service restart failed. Check status/logs." bold
+  fi
+else
+  colorize green "No changes made."
+fi
+press_key
+}
+
+test_tunnel_connectivity() {
+local file="$1" name="$2" service="backhaul-${2}.service" remote tun_name interface health
+clear
+colorize cyan "Connectivity Test: $name" bold
+echo
+if systemctl is-active --quiet "$service"; then colorize green "[✓] Service is running"; else colorize red "[✗] Service is not running"; fi
+if grep -q '^type = "tun"$' "$file"; then
+  tun_name="$(toml_get_key "$file" tun name)"
+  interface="$(toml_get_key "$file" ipx interface)"
+  remote="$(toml_get_key "$file" tun remote_addr | cut -d/ -f1)"
+  [[ -n "$tun_name" ]] && ip link show "$tun_name" >/dev/null 2>&1 && colorize green "[✓] TUN device: $tun_name" || colorize red "[✗] TUN device is not present"
+  [[ -n "$interface" ]] && ip link show "$interface" >/dev/null 2>&1 && colorize green "[✓] Network interface: $interface" || colorize yellow "[!] Network interface not found: $interface"
+  if [[ -n "$remote" ]] && command -v ping >/dev/null 2>&1 && ping -c 1 -W 2 "$remote" >/dev/null 2>&1; then colorize green "[✓] Remote TUN address responds: $remote"; else colorize yellow "[!] Remote TUN address did not respond: ${remote:-unknown}"; fi
+else
+  remote="$(toml_get_key "$file" dialer remote_addr | sed 's/^[^:]*:\/\///' | cut -d: -f1)"
+  [[ -z "$remote" ]] && remote="$(toml_get_key "$file" listener bind_addr)"
+  [[ -n "$remote" ]] && colorize cyan "[i] Endpoint: $remote"
+fi
+health="$(toml_get_key "$file" tun health_port)"
+if [[ -n "$health" ]] && command -v ss >/dev/null 2>&1; then
+  if ss -lnt 2>/dev/null | awk '{print $4}' | grep -Eq "(:|\\.)${health}$"; then colorize green "[✓] Health port is listening: $health"; else colorize yellow "[!] Health port is not listening: $health"; fi
+fi
+if command -v ip >/dev/null 2>&1; then
+  colorize cyan "[i] Default route: $(ip route show default | head -1)"
+fi
+press_key
+}
+
+tunnel_information() {
+local file="$1" name="$2" service="backhaul-${2}.service" val cronh
+clear
+colorize cyan "Tunnel Information: $name" bold
+echo
+printf 'Config: %s\n' "$file"
+printf 'Service: %s\n' "$service"
+val="$(toml_get_key "$file" transport type)"; printf 'Transport: %s\n' "${val:-unknown}"
+val="$(toml_get_key "$file" tun encapsulation)"; [[ -n "$val" ]] && printf 'Encapsulation: %s\n' "$val"
+val="$(toml_get_key "$file" ipx mode)"; [[ -n "$val" ]] && printf 'IPX Mode: %s\n' "$val"
+val="$(toml_get_key "$file" ipx profile)"; [[ -n "$val" ]] && printf 'IPX Profile: %s\n' "$val"
+for pair in 'tun local_addr:Local Address' 'tun remote_addr:Remote Address' 'tun name:TUN Device' 'tun health_port:Health Port' 'tun mtu:MTU' 'ipx interface:Interface' 'ipx listen_ip:Listen IP' 'ipx dst_ip:Destination IP' 'ipx spoof_src_ip:Spoof Source IP' 'ipx spoof_dst_ip:Spoof Destination IP' 'security enable_encryption:Encryption' 'security algorithm:Algorithm' 'tuning tuning_profile:Tuning Profile' 'tuning workers:Workers' 'tuning batch_size:Batch Size' 'logging log_level:Log Level'; do
+  section="${pair%% *}"; rest="${pair#* }"; key="${rest%%:*}"; label="${rest#*:}"; val="$(toml_get_key "$file" "$section" "$key")"; [[ -n "$val" ]] && printf '%s: %s\n' "$label" "$val"
+done
+if grep -q '^psk = ' "$file"; then echo 'PSK: ********'; fi
+if grep -q '^\[ports\]$' "$file"; then val="$(toml_get_key "$file" ports mapping)"; [[ -n "$val" ]] && printf 'Port Mapping: %s\n' "$val"; fi
+if systemctl is-enabled --quiet "$service" 2>/dev/null; then colorize green 'Service: enabled'; else colorize yellow 'Service: disabled'; fi
+if systemctl is-active --quiet "$service" 2>/dev/null; then colorize green 'Status: running'; else colorize red 'Status: stopped'; fi
+cronh="$(cron_interval_hours "$service" || true)"; if [[ -n "$cronh" ]]; then colorize green "Auto Restart: every $cronh hour(s)"; else colorize yellow 'Auto Restart: disabled'; fi
+press_key
+}
+
+toggle_tunnel() {
+local name="$1" service="backhaul-${1}.service" disabled_state="${config_dir}/.disabled-${1}" interval
+clear
+colorize cyan "Enable / Disable: $name" bold
+echo
+if systemctl is-active --quiet "$service" || systemctl is-enabled --quiet "$service" 2>/dev/null; then
+  interval="$(cron_interval_hours "$service" || true)"
+  [[ -n "$interval" ]] && printf '%s\n' "$interval" > "$disabled_state"
+  rm -f "$(auto_restart_file "$service")"
+  systemctl disable --now "$service" >/dev/null 2>&1
+  systemctl daemon-reload
+  colorize yellow "Tunnel disabled: $service" bold
+else
+  if ! systemctl enable --now "$service" >/dev/null 2>&1; then
+    colorize red "Could not enable/start $service. Service file may be missing." bold
+    press_key
+    return 1
+  fi
+  if [[ -s "$disabled_state" ]]; then
+    interval="$(cat "$disabled_state")"
+    rm -f "$disabled_state"
+    if [[ "$interval" =~ ^([1-9]|1[0-9]|2[0-4])$ ]]; then
+      cat > "$(auto_restart_file "$service")" <<EOF
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 */$interval * * * root systemctl restart $service
+EOF
+      chmod 644 "$(auto_restart_file "$service")"
+    fi
+  fi
+  colorize green "Tunnel enabled and started: $service" bold
+fi
+press_key
+}
+
 tunnel_management() {
 if ! ls "$config_dir"/*.toml 1> /dev/null 2>&1; then
 colorize red "No config files found." bold
@@ -1014,6 +1296,10 @@ colorize yellow "2) Restart this tunnel"
 echo "3) View service logs"
 echo "4) View service status"
 echo "5) Auto Restart"
+echo "6) Edit Configuration"
+echo "7) Test Tunnel Connectivity"
+echo "8) Tunnel Information"
+echo "9) Enable / Disable Tunnel"
 echo
 read -r -p "Enter your choice (0 to return): " choice
 case $choice in
@@ -1022,6 +1308,10 @@ case $choice in
 3) view_service_logs "$service_name" ;;
 4) view_service_status "$service_name" ;;
 5) auto_restart_menu "$service_name" ;;
+6) edit_tunnel_config "$selected_config" "$config_name" ;;
+7) test_tunnel_connectivity "$selected_config" "$config_name" ;;
+8) tunnel_information "$selected_config" "$config_name" ;;
+9) toggle_tunnel "$config_name" ;;
 0) return ;;
 *) colorize red "Invalid option!" && sleep 1 ;;
 esac
@@ -1046,9 +1336,12 @@ press_key
 restart_service() {
 echo
 colorize yellow "Restarting $1" bold
-if systemctl list-units --type=service | grep -q "$1"; then
-systemctl restart "$1"
+if systemctl cat "$1" >/dev/null 2>&1; then
+if systemctl restart "$1"; then
 colorize green "Service restarted successfully" bold
+else
+colorize red "Service restart failed" bold
+fi
 echo
 else
 colorize red "Service not found"
@@ -1079,7 +1372,7 @@ fi
 press_key
 }
 configure_tunnel() {
-[[ ! -d "$config_dir" ]] && {
+[[ ! -x "${config_dir}/backhaul_premium" ]] && {
 colorize red "Install Backhaul-Core first."
 press_key
 return 1
