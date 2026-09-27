@@ -3,7 +3,6 @@
 set -e
 
 REPO_URL="https://github.com/admin6501/backhaul.git"
-TEMP_DIR="/tmp/backhaul-install"
 ROOT_DIR="/root"
 
 GREEN='\033[1;32m'
@@ -58,30 +57,30 @@ echo -e "${CYAN}└────────────────────�
 echo
 
 echo -e "${BLUE}[1/5]${RESET} ${WHITE}Preparing temporary directory...${RESET}"
-rm -rf "$TEMP_DIR"
+TEMP_DIR=$(mktemp -d)
+trap 'rm -rf -- "$TEMP_DIR"' EXIT
 echo -e "      ${GREEN}✔ Done${RESET}"
 
 echo
 echo -e "${BLUE}[2/5]${RESET} ${WHITE}Cloning Backhaul repository...${RESET}"
-git clone "$REPO_URL" "$TEMP_DIR" >/dev/null 2>&1
+git clone "$REPO_URL" "$TEMP_DIR/repo" >/dev/null 2>&1
 echo -e "      ${GREEN}✔ Repository cloned successfully${RESET}"
 
 echo
 echo -e "${BLUE}[3/5]${RESET} ${WHITE}Installing files to /root...${RESET}"
-cp -a "$TEMP_DIR"/. "$ROOT_DIR"/
+cp -a "$TEMP_DIR/repo/backhaul.sh" "$TEMP_DIR/repo/backhaul-spoof.sh" "$TEMP_DIR/repo/backhaul-core" "$ROOT_DIR"/
 echo -e "      ${GREEN}✔ Files installed successfully${RESET}"
 
 echo
 echo -e "${BLUE}[4/5]${RESET} ${WHITE}Configuring permissions...${RESET}"
 chmod 755 "$ROOT_DIR/backhaul.sh"
-chmod 755 "$ROOT_DIR/backhaul-core"
 chmod 755 "$ROOT_DIR/backhaul-core/backhaul_premium"
 echo -e "      ${GREEN}✔ Permissions configured${RESET}"
 
 echo
 echo -e "${BLUE}[5/5]${RESET} ${WHITE}Cleaning temporary files...${RESET}"
-rm -rf "$TEMP_DIR"
-rm -f "$ROOT_DIR/LICENSE"
+rm -rf -- "$TEMP_DIR"
+trap - EXIT
 echo -e "      ${GREEN}✔ Cleanup completed${RESET}"
 
 echo
