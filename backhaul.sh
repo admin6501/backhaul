@@ -4,12 +4,12 @@ config_dir="/root/backhaul-core"
 CERT_DIR="/root/backhaul-core/cert_files"
 CERT_FILE="$CERT_DIR/cert.crt"
 KEY_FILE="$CERT_DIR/cert.key"
-mkdir -p "$CERT_DIR"
 if [[ $EUID -ne 0 ]]; then
 echo "This script must be run as root"
 sleep 1
 exit 1
 fi
+mkdir -p "$CERT_DIR"
 colorize() {
 local color="$1"
 local text="$2"
@@ -1044,7 +1044,7 @@ BEGIN { sec=""; changed=0 }
 }
 END { if (!changed) exit 2 }
 ' "$file" > "$out" || { rm -f "$out"; return 1; }
-cat "$out" > "$file" && rm -f "$out"
+chmod --reference="$file" "$out" && chown --reference="$file" "$out" && mv -f -- "$out" "$file" || { rm -f -- "$out"; return 1; }
 }
 
 toml_get_key() {
@@ -1351,13 +1351,17 @@ config_path="$1"
 config_name=$(basename "${config_path%.toml}")
 service_name="backhaul-${config_name}.service"
 service_path="$service_dir/$service_name"
-[ -f "$config_path" ] && rm -f "$config_path"
 if [[ -f "$service_path" ]]; then
-systemctl disable --now "$service_name" >/dev/null 2>&1 || true
+if ! systemctl disable --now "$service_name" >/dev/null 2>&1; then
+colorize red "Could not stop $service_name; configuration was kept."
+press_key
+return 1
+fi
 rm -f "$service_path"
 fi
 systemctl daemon-reload
 rm -f "$(auto_restart_file "$service_name")"
+[ -f "$config_path" ] && rm -f "$config_path"
 echo
 colorize green "Tunnel destroyed successfully!" bold
 echo
