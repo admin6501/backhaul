@@ -133,7 +133,26 @@ toml_escape() {
 
 generate_config() {
     local config_file="$1"
-    local spoof_fields
+    local spoof_fields mapping entry listen_port target_port
+    local -a mappings=()
+
+    if [[ "$ROLE" == "1" ]]; then
+        IFS=',' read -r -a mappings <<< "$PORT_MAPPING"
+        for entry in "${mappings[@]}"; do
+            mapping="${entry//[[:space:]]/}"
+            if [[ ! "$mapping" =~ ^[0-9]{1,5}(=[0-9]{1,5})?$ ]]; then
+                error "Invalid port mapping: $entry" >&2
+                return 1
+            fi
+            listen_port="${mapping%%=*}"
+            target_port="${mapping#*=}"
+            if (( 10#$listen_port < 1 || 10#$listen_port > 65535 ||
+                  10#$target_port < 1 || 10#$target_port > 65535 )); then
+                error "Port must be between 1 and 65535: $entry" >&2
+                return 1
+            fi
+        done
+    fi
 
     if [[ "$MODE" == "client" ]]; then
         printf -v spoof_fields 'spoof_dst_ip = "%s"\nspoof_src_ip = "%s"' \
@@ -189,9 +208,12 @@ EOF
 [ports]
 forwarder = "$(toml_escape "$FORWARDER")"
 mapping = [
-    "$(toml_escape "$PORT_MAPPING")",
-]
 EOF
+        for entry in "${mappings[@]}"; do
+            mapping="${entry//[[:space:]]/}"
+            printf '    "%s",\n' "$mapping" >> "$config_file"
+        done
+        printf ']\n' >> "$config_file"
     fi
 }
 
