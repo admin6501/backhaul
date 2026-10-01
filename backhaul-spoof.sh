@@ -14,6 +14,9 @@ WHITE='\033[1;37m'
 GRAY='\033[0;90m'
 NC='\033[0m'
 
+# Public default shared PSK; pressing Enter accepts this value.
+DEFAULT_PSK='pN9m6m0tH3nE3V8xKZ6Lq5yYcW2K1S7QG9u4cF0A8M4='
+
 line() {
     echo -e "${GRAY}────────────────────────────────────────────────────────────${NC}"
 }
@@ -336,8 +339,9 @@ echo -e "${GRAY}Enter the same Base64-encoded 32-byte PSK on both servers.${NC}"
 echo
 
 while true; do
-    read -r -s -p "$(echo -e "${CYAN}Enter shared PSK: ${NC}")" PSK
+    read -r -s -p "$(echo -e "${CYAN}Enter shared PSK (press Enter for default): ${NC}")" PSK
     echo
+    PSK="${PSK:-$DEFAULT_PSK}"
 
     if [[ ! "$PSK" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
         error "Invalid PSK format."
