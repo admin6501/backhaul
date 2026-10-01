@@ -454,8 +454,7 @@ echo -e "${CYAN}Role:${NC} $ROLE_NAME"
 echo -e "${CYAN}Mode:${NC} $MODE"
 
 echo
-echo -e "${YELLOW}PSK:${NC}"
-echo -e "${WHITE}$PSK${NC}"
+echo -e "${GRAY}PSK: hidden${NC}"
 
 echo
 line
