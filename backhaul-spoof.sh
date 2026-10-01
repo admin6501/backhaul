@@ -42,18 +42,18 @@ ask() {
     local value
 
     if [[ -n "$default" ]]; then
-        read -r -p "$(echo -e "${CYAN}${prompt}${NC} [${WHITE}${default}${NC}]: ")" value
+        read -r -p "$(echo -e "${CYAN}${prompt}${NC} [${WHITE}${default}${NC}]: ")" value || return 1
         echo "${value:-$default}"
     else
         while true; do
-            read -r -p "$(echo -e "${CYAN}${prompt}${NC}: ")" value
+            read -r -p "$(echo -e "${CYAN}${prompt}${NC}: ")" value || return 1
 
             if [[ -n "$value" ]]; then
                 echo "$value"
                 return
             fi
 
-            warn "This value cannot be empty."
+            warn "This value cannot be empty." >&2
         done
     fi
 }
@@ -64,7 +64,7 @@ ask_number() {
     local value
 
     while true; do
-        read -r -p "$(echo -e "${CYAN}${prompt}${NC} [${WHITE}${default}${NC}]: ")" value
+        read -r -p "$(echo -e "${CYAN}${prompt}${NC} [${WHITE}${default}${NC}]: ")" value || return 1
         value="${value:-$default}"
 
         if [[ "$value" =~ ^[0-9]+$ ]]; then
@@ -72,7 +72,7 @@ ask_number() {
             return
         fi
 
-        error "Please enter a valid number."
+        error "Please enter a valid number." >&2
     done
 }
 
@@ -82,7 +82,7 @@ ask_bool() {
     local value
 
     while true; do
-        read -r -p "$(echo -e "${CYAN}${prompt}${NC} [${WHITE}${default}${NC}]: ")" value
+        read -r -p "$(echo -e "${CYAN}${prompt}${NC} [${WHITE}${default}${NC}]: ")" value || return 1
         value="${value:-$default}"
 
         case "$value" in
@@ -91,7 +91,7 @@ ask_bool() {
                 return
                 ;;
             *)
-                error "Please enter only true or false."
+                error "Please enter only true or false." >&2
                 ;;
         esac
     done
