@@ -341,8 +341,12 @@ echo -e "${MAGENTA}▸ IPX${NC}"
 echo
 
 PROFILE="$(ask "Profile" "icmp")"
-LISTEN_IP="$(ask "Listen IP")"
-DST_IP="$(ask "Destination IP")"
+LISTEN_IP="$(ask "Listen IP (this server)")"
+if [[ "$MODE" == "server" ]]; then
+    DST_IP="$(ask "Destination IP (outside server)")"
+else
+    DST_IP="$(ask "Destination IP (Iran server)")"
+fi
 SPOOF_SRC_IP="$(ask "Spoof Source IP")"
 SPOOF_DST_IP="$(ask "Spoof Destination IP")"
 INTERFACE="$(ask "Network Interface" "eth0")"

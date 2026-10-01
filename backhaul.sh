@@ -277,7 +277,7 @@ colorize red "Invalid encapsulation."
 done
 fi
 echo
-if [[ "${CONFIG[tun_encapsulation]}" == "ipx" ]]; then
+if [[ "${CONFIG[tun_encapsulation]}" == "ipx" || "${CONFIG[transport_type]}" == "spoof-tunnel" ]]; then
 is_ipx="true"
 fi
 if [[ "$is_ipx" != "true" ]]; then
@@ -291,7 +291,7 @@ if [[ ! "${CONFIG[transport_type]}" =~ ^(tun|ws)$ ]] && [[ "$is_ipx" != "true" ]
 prompt_boolean "Enable Proxy Protocol" "false" CONFIG[proxy_protocol]
 fi
 else
-if [[ "${CONFIG[transport_type]}" != "tun" ]]; then
+if [[ "${CONFIG[transport_type]}" != "tun" && "$is_ipx" != "true" ]]; then
 prompt_with_default "Connection Pool" "8" CONFIG[connection_pool]
 fi
 fi
@@ -379,12 +379,11 @@ prompt_with_default "MTU" "1320" CONFIG[tun_mtu]
 CONFIG[tun_encapsulation]="ipx"
 CONFIG[ipx_mode]="$mode"
 CONFIG[ipx_profile]="icmp"
+prompt_with_default "Listen IP (this server)" "" CONFIG[ipx_listen_ip]
 if [[ "$mode" == "server" ]]; then
-prompt_with_default "Listen IP" "" CONFIG[ipx_listen_ip]
-prompt_with_default "Destination IP" "" CONFIG[ipx_dst_ip]
+prompt_with_default "Destination IP (outside server)" "" CONFIG[ipx_dst_ip]
 else
-prompt_with_default "Listen IP" "" CONFIG[ipx_listen_ip]
-prompt_with_default "Destination IP" "" CONFIG[ipx_dst_ip]
+prompt_with_default "Destination IP (Iran server)" "" CONFIG[ipx_dst_ip]
 fi
 prompt_with_default "Spoof Source IP" "" CONFIG[ipx_spoof_src_ip]
 prompt_with_default "Spoof Destination IP" "" CONFIG[ipx_spoof_dst_ip]
