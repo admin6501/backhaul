@@ -3,6 +3,8 @@
 set -euo pipefail
 
 BACKHAUL_DIR="/root/backhaul-core"
+# Match the main builder's public default on both ends of the tunnel.
+DEFAULT_IPX_PSK="YmFja2hhdWwtZGVmYXVsdC1wc2stY2hhbmdlLW1lISE="
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -102,24 +104,6 @@ toml_escape() {
     value="${value//\"/\\\"}"
 
     printf '%s' "$value"
-}
-
-generate_psk() {
-    local psk=""
-
-    if command -v openssl >/dev/null 2>&1; then
-        psk="$(openssl rand -base64 32 | tr -d '\n')"
-    elif command -v base64 >/dev/null 2>&1; then
-        psk="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
-    else
-        return 1
-    fi
-
-    if [[ ! "$psk" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
-        return 1
-    fi
-
-    printf '%s' "$psk"
 }
 
 generate_config() {
@@ -351,43 +335,22 @@ echo
 echo -e "${WHITE}PSK Configuration${NC}"
 echo
 
-echo -e "${GREEN}1)${NC} Generate Random PSK"
-echo -e "${BLUE}2)${NC} Enter Custom PSK"
+echo -e "${GRAY}Press Enter to use the shared default, or enter the PSK used on the other server.${NC}"
 echo
 
 while true; do
-    read -r -p "$(echo -e "${CYAN}Select [1/2]: ${NC}")" PSK_MODE
-
-    case "$PSK_MODE" in
-        1)
-            if ! PSK="$(generate_psk)"; then
-                error "Failed to generate a valid Base64 PSK."
-                exit 1
-            fi
-
-            PSK_SOURCE="Generated"
-            break
-            ;;
-        2)
-            while true; do
-                read -r -s -p "$(echo -e "${CYAN}Enter PSK: ${NC}")" PSK
-                echo
-
-                if [[ "$PSK" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
-                    PSK_SOURCE="Custom"
-                    break
-                fi
-
-                error "Invalid PSK format."
-                echo -e "${GRAY}The PSK must be Base64 encoded 32 bytes, 44 characters long and end with =.${NC}"
-            done
-
-            break
-            ;;
-        *)
-            error "Invalid selection. Choose 1 or 2."
-            ;;
-    esac
+    read -r -p "$(echo -e "${CYAN}PSK (Enter = shared default): ${NC}")" PSK
+    echo
+    PSK="${PSK:-$DEFAULT_IPX_PSK}"
+    if [[ "$PSK" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+        if [[ "$PSK" == "$DEFAULT_IPX_PSK" ]]; then
+            PSK_SOURCE="Shared default"
+        else
+            PSK_SOURCE="Custom"
+        fi
+        break
+    fi
+    error "Invalid PSK format. Use a Base64-encoded 32-byte key (44 characters ending in =)."
 done
 
 line
