@@ -62,10 +62,10 @@ done
 }
 validate_cidr() {
 local cidr="$1"
-if [[ ! "$cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]{1,2})$ ]]; then
+if [[ ! "$cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/24$ ]]; then
 return 1
 fi
-IFS='/' read -r ip mask <<< "$cidr"
+local ip="${cidr%/24}"
 IFS='.' read -r a b c d <<< "$ip"
 local octet
 for octet in "$a" "$b" "$c" "$d"; do
@@ -74,25 +74,7 @@ for octet in "$a" "$b" "$c" "$d"; do
     return 1
   fi
 done
-mask=$((10#$mask))
-if (( mask < 1 || mask > 32 )); then
-return 1
-fi
-local ip_int=$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))
-local mask_int
-if (( mask == 32 )); then
-mask_int=0xFFFFFFFF
-else
-mask_int=$(( (0xFFFFFFFF << (32 - mask)) & 0xFFFFFFFF ))
-fi
-local net_int=$(( ip_int & mask_int ))
-local broadcast_int=$(( net_int | (~mask_int & 0xFFFFFFFF) ))
-if (( mask < 31 && ip_int == net_int )); then
-return 1
-fi
-if (( mask < 31 && ip_int == broadcast_int )); then
-return 1
-fi
+if (( 10#$d == 0 || 10#$d == 255 )); then return 1; fi
 return 0
 }
 install_jq() {
@@ -353,14 +335,14 @@ prompt_with_default "TUN Local Address (CIDR)" "$default_local" CONFIG[tun_local
 if validate_cidr "${CONFIG[tun_local_addr]}"; then
 break
 fi
-colorize red "Invalid CIDR. Use a valid host address with a prefix from /1 to /32; network and broadcast addresses are not allowed."
+colorize red "Invalid TUN address. Use an IPv4 host address ending in /24 (not .0 or .255)."
 done
 while true; do
 prompt_with_default "TUN Remote Address (CIDR)" "$default_remote" CONFIG[tun_remote_addr]
 if validate_cidr "${CONFIG[tun_remote_addr]}"; then
 break
 fi
-colorize red "Invalid CIDR format."
+colorize red "Invalid TUN address. Use an IPv4 host address ending in /24 (not .0 or .255)."
 done
 prompt_with_default "Health Port" "1234" CONFIG[tun_health_port]
 if [[ "$is_ipx" == "true" ]]; then
@@ -385,12 +367,12 @@ fi
 while true; do
 prompt_with_default "TUN Local Address (CIDR)" "$default_local" CONFIG[tun_local_addr]
 if validate_cidr "${CONFIG[tun_local_addr]}"; then break; fi
-colorize red "Invalid CIDR format."
+colorize red "Invalid TUN address. Use an IPv4 host address ending in /24 (not .0 or .255)."
 done
 while true; do
 prompt_with_default "TUN Remote Address (CIDR)" "$default_remote" CONFIG[tun_remote_addr]
 if validate_cidr "${CONFIG[tun_remote_addr]}"; then break; fi
-colorize red "Invalid CIDR format."
+colorize red "Invalid TUN address. Use an IPv4 host address ending in /24 (not .0 or .255)."
 done
 prompt_with_default "Health Port" "1212" CONFIG[tun_health_port]
 prompt_with_default "MTU" "1320" CONFIG[tun_mtu]
