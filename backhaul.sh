@@ -556,7 +556,11 @@ colorize red "Invalid profile: ${CONFIG[ipx_profile]}"
 echo
 colorize yellow "Please choose one of: ${AVAILABLE_PROFILES[*]}"
 done
-prompt_with_default "Listen IP" "$SERVER_IP" CONFIG[ipx_listen_ip]
+while true; do
+prompt_with_default "Listen IP" "" CONFIG[ipx_listen_ip]
+[[ -n "${CONFIG[ipx_listen_ip]}" ]] && break
+colorize red "Listen IP cannot be empty."
+done
 while :; do
 prompt_with_default "Destination IP" "" CONFIG[ipx_dst_ip]
 if [[ -n "${CONFIG[ipx_dst_ip]}" ]]; then
