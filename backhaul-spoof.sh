@@ -446,7 +446,7 @@ if [[ "$ROLE" == "1" ]]; then
     echo
 
     FORWARDER="$(ask "Port Forwarder" "iptables")"
-    PORT_MAPPING="$(ask "Port Mapping" "30814=30814")"
+    PORT_MAPPING="$(ask "Port Mapping")"
 fi
 
 line
