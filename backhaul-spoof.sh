@@ -133,6 +133,15 @@ toml_escape() {
 
 generate_config() {
     local config_file="$1"
+    local spoof_fields
+
+    if [[ "$MODE" == "client" ]]; then
+        printf -v spoof_fields 'spoof_dst_ip = "%s"\nspoof_src_ip = "%s"' \
+            "$(toml_escape "$SPOOF_DST_IP")" "$(toml_escape "$SPOOF_SRC_IP")"
+    else
+        printf -v spoof_fields 'spoof_src_ip = "%s"\nspoof_dst_ip = "%s"' \
+            "$(toml_escape "$SPOOF_SRC_IP")" "$(toml_escape "$SPOOF_DST_IP")"
+    fi
 
     cat > "$config_file" <<EOF
 [transport]
@@ -153,8 +162,7 @@ mode = "$(toml_escape "$MODE")"
 profile = "$(toml_escape "$PROFILE")"
 listen_ip = "$(toml_escape "$LISTEN_IP")"
 dst_ip = "$(toml_escape "$DST_IP")"
-spoof_src_ip = "$(toml_escape "$SPOOF_SRC_IP")"
-spoof_dst_ip = "$(toml_escape "$SPOOF_DST_IP")"
+$spoof_fields
 interface = "$(toml_escape "$INTERFACE")"
 
 [security]
@@ -347,8 +355,13 @@ if [[ "$MODE" == "server" ]]; then
 else
     DST_IP="$(ask "Destination IP (Iran server)")"
 fi
-SPOOF_SRC_IP="$(ask "Spoof Source IP")"
-SPOOF_DST_IP="$(ask "Spoof Destination IP")"
+if [[ "$MODE" == "client" ]]; then
+    SPOOF_DST_IP="$(ask "Spoof Destination IP")"
+    SPOOF_SRC_IP="$(ask "Spoof Source IP")"
+else
+    SPOOF_SRC_IP="$(ask "Spoof Source IP")"
+    SPOOF_DST_IP="$(ask "Spoof Destination IP")"
+fi
 INTERFACE="$(ask "Network Interface" "eth0")"
 
 line

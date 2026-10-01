@@ -385,8 +385,13 @@ prompt_with_default "Destination IP (outside server)" "" CONFIG[ipx_dst_ip]
 else
 prompt_with_default "Destination IP (Iran server)" "" CONFIG[ipx_dst_ip]
 fi
+if [[ "$mode" == "client" ]]; then
+prompt_with_default "Spoof Destination IP" "" CONFIG[ipx_spoof_dst_ip]
+prompt_with_default "Spoof Source IP" "" CONFIG[ipx_spoof_src_ip]
+else
 prompt_with_default "Spoof Source IP" "" CONFIG[ipx_spoof_src_ip]
 prompt_with_default "Spoof Destination IP" "" CONFIG[ipx_spoof_dst_ip]
+fi
 local interface
 interface=$(ip route show default | awk '{print $5}')
 prompt_with_default "Network Interface" "$interface" CONFIG[ipx_interface]
@@ -617,8 +622,13 @@ echo "mode = \"${CONFIG[ipx_mode]}\""
 echo "profile = \"icmp\""
 echo "listen_ip = \"${CONFIG[ipx_listen_ip]}\""
 echo "dst_ip = \"${CONFIG[ipx_dst_ip]}\""
+if [[ "$mode" == "client" ]]; then
+echo "spoof_dst_ip = \"${CONFIG[ipx_spoof_dst_ip]}\""
+echo "spoof_src_ip = \"${CONFIG[ipx_spoof_src_ip]}\""
+else
 echo "spoof_src_ip = \"${CONFIG[ipx_spoof_src_ip]}\""
 echo "spoof_dst_ip = \"${CONFIG[ipx_spoof_dst_ip]}\""
+fi
 echo "interface = \"${CONFIG[ipx_interface]}\""
 echo ""
 else
