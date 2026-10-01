@@ -379,12 +379,23 @@ prompt_with_default "MTU" "1320" CONFIG[tun_mtu]
 CONFIG[tun_encapsulation]="ipx"
 CONFIG[ipx_mode]="$mode"
 CONFIG[ipx_profile]="icmp"
-prompt_with_default "Listen IP (this server)" "" CONFIG[ipx_listen_ip]
+local listen_default=""
+[[ "$mode" == "server" ]] && listen_default="$SERVER_IP"
+while true; do
+prompt_with_default "Listen IP (this server)" "$listen_default" CONFIG[ipx_listen_ip]
+[[ -n "${CONFIG[ipx_listen_ip]}" ]] && break
+colorize red "Listen IP cannot be empty."
+done
 if [[ "$mode" == "server" ]]; then
-prompt_with_default "Destination IP (outside server)" "" CONFIG[ipx_dst_ip]
+local destination_label="Destination IP (outside server)"
 else
-prompt_with_default "Destination IP (Iran server)" "" CONFIG[ipx_dst_ip]
+local destination_label="Destination IP (Iran server)"
 fi
+while true; do
+prompt_with_default "$destination_label" "" CONFIG[ipx_dst_ip]
+[[ -n "${CONFIG[ipx_dst_ip]}" ]] && break
+colorize red "Destination IP cannot be empty."
+done
 if [[ "$mode" == "client" ]]; then
 prompt_with_default "Spoof Destination IP" "" CONFIG[ipx_spoof_dst_ip]
 prompt_with_default "Spoof Source IP" "" CONFIG[ipx_spoof_src_ip]
@@ -556,13 +567,19 @@ colorize red "Invalid profile: ${CONFIG[ipx_profile]}"
 echo
 colorize yellow "Please choose one of: ${AVAILABLE_PROFILES[*]}"
 done
+local listen_default=""
+[[ "$mode" == "server" ]] && listen_default="$SERVER_IP"
 while true; do
-prompt_with_default "Listen IP" "" CONFIG[ipx_listen_ip]
+prompt_with_default "Listen IP (this server)" "$listen_default" CONFIG[ipx_listen_ip]
 [[ -n "${CONFIG[ipx_listen_ip]}" ]] && break
 colorize red "Listen IP cannot be empty."
 done
 while :; do
-prompt_with_default "Destination IP" "" CONFIG[ipx_dst_ip]
+if [[ "$mode" == "server" ]]; then
+prompt_with_default "Destination IP (outside server)" "" CONFIG[ipx_dst_ip]
+else
+prompt_with_default "Destination IP (Iran server)" "" CONFIG[ipx_dst_ip]
+fi
 if [[ -n "${CONFIG[ipx_dst_ip]}" ]]; then
 break
 fi
