@@ -27,11 +27,11 @@ info() {
 }
 
 warn() {
-    echo -e "${YELLOW}[!]${NC} $1"
+    echo -e "${YELLOW}[!]${NC} $1" >&2
 }
 
 error() {
-    echo -e "${RED}[✗]${NC} $1"
+    echo -e "${RED}[✗]${NC} $1" >&2
 }
 
 ask() {
@@ -102,24 +102,6 @@ toml_escape() {
     value="${value//\"/\\\"}"
 
     printf '%s' "$value"
-}
-
-generate_psk() {
-    local psk=""
-
-    if command -v openssl >/dev/null 2>&1; then
-        psk="$(openssl rand -base64 32 | tr -d '\n')"
-    elif command -v base64 >/dev/null 2>&1; then
-        psk="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
-    else
-        return 1
-    fi
-
-    if [[ ! "$psk" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
-        return 1
-    fi
-
-    printf '%s' "$psk"
 }
 
 generate_config() {
@@ -350,46 +332,31 @@ KDF_ITERATIONS="$(ask_number "KDF Iterations" "100000")"
 echo
 echo -e "${WHITE}PSK Configuration${NC}"
 echo
-
-echo -e "${GREEN}1)${NC} Generate Random PSK"
-echo -e "${BLUE}2)${NC} Enter Custom PSK"
+echo -e "${GRAY}Enter the same Base64-encoded 32-byte PSK on both servers.${NC}"
 echo
 
 while true; do
-    read -r -p "$(echo -e "${CYAN}Select [1/2]: ${NC}")" PSK_MODE
+    read -r -s -p "$(echo -e "${CYAN}Enter shared PSK: ${NC}")" PSK
+    echo
 
-    case "$PSK_MODE" in
-        1)
-            if ! PSK="$(generate_psk)"; then
-                error "Failed to generate a valid Base64 PSK."
-                exit 1
-            fi
+    if [[ ! "$PSK" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+        error "Invalid PSK format."
+        echo -e "${GRAY}The PSK must be Base64 encoded 32 bytes, 44 characters long and end with =.${NC}"
+        continue
+    fi
 
-            PSK_SOURCE="Generated"
-            break
-            ;;
-        2)
-            while true; do
-                read -r -s -p "$(echo -e "${CYAN}Enter PSK: ${NC}")" PSK
-                echo
+    if ! decoded_size=$(printf '%s' "$PSK" | base64 --decode 2>/dev/null | wc -c); then
+        error "The PSK is not valid Base64."
+        continue
+    fi
 
-                if [[ "$PSK" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
-                    PSK_SOURCE="Custom"
-                    break
-                fi
+    if [[ "$decoded_size" -ne 32 ]]; then
+        error "The decoded PSK must be exactly 32 bytes."
+        continue
+    fi
 
-                error "Invalid PSK format."
-                echo -e "${GRAY}The PSK must be Base64 encoded 32 bytes, 44 characters long and end with =.${NC}"
-            done
-
-            break
-            ;;
-        *)
-            error "Invalid selection. Choose 1 or 2."
-            ;;
-    esac
+    break
 done
-
 line
 
 echo -e "${MAGENTA}▸ Tuning${NC}"
@@ -437,11 +404,9 @@ echo -e "${CYAN}Destination IP:${NC}   $DST_IP"
 echo -e "${CYAN}Interface:${NC}        $INTERFACE"
 echo -e "${CYAN}Encryption:${NC}       $ENABLE_ENCRYPTION"
 echo -e "${CYAN}Algorithm:${NC}        $ALGORITHM"
-echo -e "${CYAN}PSK Source:${NC}       $PSK_SOURCE"
 
 echo
-echo -e "${YELLOW}PSK:${NC}"
-echo -e "${WHITE}$PSK${NC}"
+echo -e "${GRAY}PSK: hidden${NC}"
 echo
 
 line
@@ -459,9 +424,16 @@ esac
 echo
 info "Generating configuration..."
 
-generate_config "$CONFIG_FILE"
+CONFIG_TMP=$(mktemp "$BACKHAUL_DIR/.${CONFIG_NAME}.XXXXXX") || {
+    error "Could not create a temporary configuration file."
+    exit 1
+}
+trap 'rm -f -- "$CONFIG_TMP"' EXIT HUP INT TERM
 
-chmod 600 "$CONFIG_FILE"
+generate_config "$CONFIG_TMP"
+chmod 600 "$CONFIG_TMP"
+mv -f -- "$CONFIG_TMP" "$CONFIG_FILE"
+trap - EXIT HUP INT TERM
 
 echo
 line
