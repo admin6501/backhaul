@@ -97,6 +97,31 @@ ask_bool() {
     done
 }
 
+valid_tun_addr() {
+    local address="$1" ip a b c d octet
+    [[ "$address" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/24$ ]] || return 1
+    ip="${address%/24}"
+    IFS='.' read -r a b c d <<< "$ip"
+    for octet in "$a" "$b" "$c" "$d"; do
+        if [[ "$octet" != "0" && "$octet" == 0* ]] || (( 10#$octet > 255 )); then
+            return 1
+        fi
+    done
+    (( 10#$d > 0 && 10#$d < 255 ))
+}
+
+ask_tun_addr() {
+    local label="$1" default="$2" address
+    while true; do
+        address="$(ask "$label" "$default")" || return 1
+        if valid_tun_addr "$address"; then
+            printf '%s\n' "$address"
+            return 0
+        fi
+        error "Use a valid IPv4 host address ending in /24 (not .0 or .255)." >&2
+    done
+}
+
 toml_escape() {
     local value="$1"
 
@@ -304,8 +329,8 @@ echo
 ENCAPSULATION="$(ask "Encapsulation" "ipx")"
 TUN_NAME="$(ask "TUN Name" "bh-tun")"
 
-LOCAL_ADDR="$(ask "Local Address" "$DEFAULT_LOCAL")"
-REMOTE_ADDR="$(ask "Remote Address" "$DEFAULT_REMOTE")"
+LOCAL_ADDR="$(ask_tun_addr "Local Address" "$DEFAULT_LOCAL")"
+REMOTE_ADDR="$(ask_tun_addr "Remote Address" "$DEFAULT_REMOTE")"
 
 HEALTH_PORT="$(ask_number "Health Port" "1212")"
 MTU="$(ask_number "MTU" "1320")"
