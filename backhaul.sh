@@ -67,13 +67,18 @@ return 1
 fi
 IFS='/' read -r ip mask <<< "$cidr"
 IFS='.' read -r a b c d <<< "$ip"
-if (( a<0 || a>255 || b<0 || b>255 || c<0 || c>255 || d<0 || d>255 )); then
-return 1
-fi
+local octet
+for octet in "$a" "$b" "$c" "$d"; do
+  # Leading zeros are ambiguous to both Bash arithmetic and network tools.
+  if [[ "$octet" != "0" && "$octet" == 0* ]] || (( 10#$octet > 255 )); then
+    return 1
+  fi
+done
+mask=$((10#$mask))
 if (( mask < 1 || mask > 32 )); then
 return 1
 fi
-local ip_int=$(( (a << 24) | (b << 16) | (c << 8) | d ))
+local ip_int=$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))
 local mask_int
 if (( mask == 32 )); then
 mask_int=0xFFFFFFFF
@@ -82,10 +87,10 @@ mask_int=$(( (0xFFFFFFFF << (32 - mask)) & 0xFFFFFFFF ))
 fi
 local net_int=$(( ip_int & mask_int ))
 local broadcast_int=$(( net_int | (~mask_int & 0xFFFFFFFF) ))
-if (( ip_int == net_int )); then
+if (( mask < 31 && ip_int == net_int )); then
 return 1
 fi
-if (( ip_int == broadcast_int )); then
+if (( mask < 31 && ip_int == broadcast_int )); then
 return 1
 fi
 return 0
@@ -778,9 +783,19 @@ config_file="${config_dir}/iran${tunnel_port}.toml"
 else
 config_file="${config_dir}/kharej${tunnel_port}.toml"
 fi
-generate_toml_config "$mode" "$config_file" "$is_tun" "$is_ipx"
 local service_type
 [[ "$mode" == "server" ]] && service_type="iran" || service_type="kharej"
+if [[ -e "$config_file" || -e "${service_dir}/backhaul-${service_type}${tunnel_port}.service" ]]; then
+colorize red "A tunnel already uses this role and port ($tunnel_port). Existing configuration was not changed."
+press_key
+return 1
+fi
+if ! generate_toml_config "$mode" "$config_file" "$is_tun" "$is_ipx"; then
+colorize red "Could not write the configuration file."
+press_key
+return 1
+fi
+chmod 600 "$config_file"
 if ! create_systemd_service "$service_type" "$tunnel_port" "$config_file"; then
 press_key
 return 1
